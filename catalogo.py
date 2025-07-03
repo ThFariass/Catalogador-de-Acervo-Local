@@ -11,7 +11,6 @@ from qgis.core import (QgsVectorLayer, QgsVectorDataProvider, QgsField,
                      Qgis, QgsMessageLog)
 
 class SentinelaDeAcervo(QWidget):
-
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Sentinela de Acervo (v4.0 - Unificado)")
@@ -20,9 +19,8 @@ class SentinelaDeAcervo(QWidget):
         # Declaração de todas as "peças" e "memória" do nosso edifício
         self.root_path = None
         self.footprint_layer = None
-        self.current_selected_zip_path = None # A nossa "memória central"
+        self.current_selected_zip_path = None 
 
-        # AJUSTE DE ALVO: AGORA PROCURAMOS POR .TIF
         self.archive_extension = '.zip'
         self.target_file_extension = '.tif' 
         self.preview_image_extension = '.png'
@@ -49,7 +47,7 @@ class SentinelaDeAcervo(QWidget):
         self.catalog_list.itemClicked.connect(self.load_zip_files_from_folder)
         layout.addWidget(self.catalog_list)
 
-        self.image_label = QLabel("Arquivos Disponíveis (.zip):")
+        self.image_label = QLabel("Imagens Disponíveis (Arquivos):")
         layout.addWidget(self.image_label)
         self.image_list = QListWidget()
         self.image_list.itemClicked.connect(self.on_list_item_selected)
@@ -72,6 +70,7 @@ class SentinelaDeAcervo(QWidget):
         layout.addWidget(self.load_image_button)
 
         self.exit_button = QPushButton("Sair")
+        self.exit_button.setStyleSheet("background-color: #ff0000   ; color: white; font-weight: bold;")
         self.exit_button.clicked.connect(self.close)
         layout.addWidget(self.exit_button)
 
@@ -102,8 +101,17 @@ class SentinelaDeAcervo(QWidget):
             QgsField("acquisition_start_utc", QVariant.String),
             QgsField("orbit_direction", QVariant.String),
             QgsField("polarization", QVariant.String),
-            QgsField("incidence_center", QVariant.Double),
             QgsField("product_file", QVariant.String),
+            QgsField("range_resolution_near", QVariant.Double),
+            QgsField("range_resolution_center", QVariant.Double),
+            QgsField("range_resolution", QVariant.Double),
+            QgsField("product_level", QVariant.String),
+            QgsField("acquisiton_mode", QVariant.String),
+            QgsField("azimuth_resolution", QVariant.Double),
+            QgsField("incidence_near", QVariant.Double),
+            QgsField("incidence_center", QVariant.Double),
+            QgsField("incidence_far", QVariant.Double),
+            QgsField("acquisition_id", QVariant.Double)
         ])
         vl.updateFields()
 
@@ -145,8 +153,17 @@ class SentinelaDeAcervo(QWidget):
                             attributes['acquisition_start_utc'],
                             attributes['orbit_direction'],
                             attributes['polarization'],
-                            attributes['incidence_center'],
                             attributes['product_file'],
+                            attributes['range_resolution_near'],
+                            attributes['range_resolution_center'],
+                            attributes['range_resolution_far'],
+                            attributes['product_level'],
+                            attributes['acquisition_mode'],
+                            attributes['azimuth_resolution'],
+                            attributes['incidence_near'],
+                            attributes['incidence_center'],
+                            attributes['incidence_far'],
+                            attributes['acquisition_id']
                         ])
                         features.append(feature)
 
@@ -208,13 +225,26 @@ class SentinelaDeAcervo(QWidget):
                     'orbit_direction': find_text_safely('.//orbit_direction') or 'N/D',
                     'polarization': find_text_safely('.//polarization') or 'N/D',
                     'product_file': find_text_safely('.//product_file') or 'N/D',
+                    'product_level': find_text_safely('.//product_level') or 'N/D',
+                    'acquisition_mode': find_text_safely('.//acquisition_mode') or 'N/D'
                 }
                 try:
                     attributes['satellite_look_angle'] = float(find_text_safely('.//satellite_look_angle') or 0.0)
+                    attributes['range_resolution_near'] = float(find_text_safely('.//range_resolution_near') or 0.0)
+                    attributes['range_resolution_center'] = float(find_text_safely('.//range_resolution_center') or 0.0)
+                    attributes['range_resolution_far'] = float(find_text_safely('.//range_resolution_far') or 0.0)
+                    attributes['azimuth_resolution'] = float(find_text_safely('.//azimuth_resolution') or 0.0)
+                    attributes['incidence_near'] = float(find_text_safely('.//incidence_near') or 0.0)
                     attributes['incidence_center'] = float(find_text_safely('.//incidence_center') or 0.0)
+                    attributes['incidence_far'] = float(find_text_safely('.//incidence_far') or 0.0)
+                    attributes['acquisition_id'] = float(find_text_safely('.//acquisition_id') or 0.0)
                 except (ValueError, TypeError):
                     attributes['satellite_look_angle'] = 0.0
-                    attributes['incidence_center'] = 0.0
+                    attributes['range_resolution_near'] = 0.0
+                    attributes['range_resolution_center'] = 0.0
+                    attributes['range_resolution_far'] = 0.0
+                    attributes['azimuth_resolution'] = 0.0
+                    attributes['incidence_near'] = 0.0
                 
                 if all(coords.values()):
                     return {'coords': coords, 'attributes': attributes}
@@ -263,8 +293,10 @@ class SentinelaDeAcervo(QWidget):
         target_filename_inside_zip = None
         try:
             with zipfile.ZipFile(zip_filepath, 'r') as zf:
+                # Loop para encontrar o arquivo .tif específico
                 for file in zf.namelist():
-                    if file.lower().endswith(self.target_file_extension):
+                    # Verifica se o nome do arquivo contém 'grd' E termina com .tif
+                    if 'grd' in file.lower() and file.lower().endswith(self.target_file_extension):
                         target_filename_inside_zip = file
                         break
         except Exception as e:
@@ -275,6 +307,7 @@ class SentinelaDeAcervo(QWidget):
             qgis_virtual_path = f"/vsizip/{zip_filepath}/{target_filename_inside_zip}"
             layer_name = os.path.splitext(os.path.basename(target_filename_inside_zip))[0]
             iface.addRasterLayer(qgis_virtual_path, layer_name)
+            QgsMessageLog.logMessage(f"Imagem GRD '{target_filename_inside_zip}' carregada com sucesso.", 'Sentinela', Qgis.Success)
         else:
             QMessageBox.warning(self, "Não Encontrado", f"Nenhum arquivo {self.target_file_extension} encontrado dentro do ZIP.")
 
