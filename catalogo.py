@@ -10,6 +10,8 @@ from qgis.core import (QgsVectorLayer, QgsVectorDataProvider, QgsField,
                      QgsFeature, QgsGeometry, QgsPointXY, QgsProject,
                      Qgis, QgsMessageLog)
 
+class SentinelaDeAcervo(QWidget):
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Sentinela de Acervo (v4.0 - Unificado)")
@@ -22,7 +24,7 @@ from qgis.core import (QgsVectorLayer, QgsVectorDataProvider, QgsField,
 
         # AJUSTE DE ALVO: AGORA PROCURAMOS POR .TIF
         self.archive_extension = '.zip'
-        self.target_file_extension = '.tif' # MUDANÇA CRUCIAL
+        self.target_file_extension = '.tif' 
         self.preview_image_extension = '.png'
         self.metadata_file_extension = '.xml'
 
@@ -88,8 +90,8 @@ from qgis.core import (QgsVectorLayer, QgsVectorDataProvider, QgsField,
 
         vl = QgsVectorLayer("Polygon?crs=EPSG:4326", layer_name, "memory")
         pr = vl.dataProvider()
-        # pr.addAttributes([QgsField("zip_path", QVariant.String)])
-        # pr.addAttributes([QgsField("product_type", QVariant.String)])
+
+        # Definição final e correta dos campos/colunas
         pr.addAttributes([
             QgsField("zip_path", QVariant.String),
             QgsField("product_type", QVariant.String),
@@ -97,30 +99,25 @@ from qgis.core import (QgsVectorLayer, QgsVectorDataProvider, QgsField,
             QgsField("acquisition_mode", QVariant.String),
             QgsField("look_side", QVariant.String),
             QgsField("satellite_look_angle", QVariant.Double),
-            QgsField("acquisition_start_utc", QVariant.Double),
+            QgsField("acquisition_start_utc", QVariant.String),
             QgsField("orbit_direction", QVariant.String),
             QgsField("polarization", QVariant.String),
-            QgsField("incidence_center", QVariant.Double)
+            QgsField("incidence_center", QVariant.Double),
+            QgsField("product_file", QVariant.String),
         ])
         vl.updateFields()
 
         QgsMessageLog.logMessage("Iniciando mapeamento do acervo...", 'Sentinela', Qgis.Info)
         features = []
-
-        # O loop principal que percorre as pastas no seu Drive E:\
         for catalog_name in os.listdir(self.root_path):
             try:
                 catalog_path = os.path.join(self.root_path, catalog_name)
-                if not os.path.isdir(catalog_path):
-                    continue
+                if not os.path.isdir(catalog_path): continue
 
                 for zip_filename in os.listdir(catalog_path):
-                    if not zip_filename.lower().endswith(self.archive_extension):
-                        continue
+                    if not zip_filename.lower().endswith(self.archive_extension): continue
                     
                     zip_filepath = os.path.join(catalog_path, zip_filename)
-                    
-                    # --- MUDANÇA AQUI: Usando o "Super-Extrator" ---
                     extracted_data = self.get_info_from_zip(zip_filepath)
                     
                     if extracted_data:
@@ -136,28 +133,27 @@ from qgis.core import (QgsVectorLayer, QgsVectorDataProvider, QgsField,
                         
                         feature = QgsFeature()
                         feature.setGeometry(QgsGeometry.fromPolygonXY([points]))
-
-                        # --- MUDANÇA CRUCIAL: Preenchendo todos os 10 atributos ---
-                        # A ordem deve ser EXATAMENTE a mesma que você definiu em pr.addAttributes
+                        
+                        # Preenchendo os atributos na ordem correta
                         feature.setAttributes([
-                            zip_filepath,                       # 0
-                            attributes['product_type'],         # 1
-                            attributes['satellite_name'],       # 2
-                            attributes['acquisition_mode'],     # 3
-                            attributes['look_side'],            # 4
-                            attributes['satellite_look_angle'], # 5
-                            attributes['acquisition_start_utc'],# 6
-                            attributes['orbit_direction'],      # 7
-                            attributes['polarization'],         # 8
-                            attributes['incidence_center']      # 9
+                            zip_filepath,
+                            attributes['product_type'],
+                            attributes['satellite_name'],
+                            attributes['acquisition_mode'],
+                            attributes['look_side'],
+                            attributes['satellite_look_angle'],
+                            attributes['acquisition_start_utc'],
+                            attributes['orbit_direction'],
+                            attributes['polarization'],
+                            attributes['incidence_center'],
+                            attributes['product_file'],
                         ])
                         features.append(feature)
 
             except PermissionError:
                 QgsMessageLog.logMessage(f"Acesso negado à pasta do sistema '{catalog_name}'. Ignorando.", 'Sentinela', Qgis.Warning)
                 continue
-
-
+        
         pr.addFeatures(features)
         vl.updateExtents()
         QgsProject.instance().addMapLayer(vl)
@@ -165,66 +161,68 @@ from qgis.core import (QgsVectorLayer, QgsVectorDataProvider, QgsField,
         QgsMessageLog.logMessage(f"{len(features)} imagens mapeadas com sucesso!", 'Sentinela', Qgis.Success)
 
         if self.footprint_layer:
-            try:
-                self.footprint_layer.selectionChanged.disconnect(self.on_map_selection_changed)
-            except TypeError:
-                pass
+            try: self.footprint_layer.selectionChanged.disconnect(self.on_map_selection_changed)
+            except TypeError: pass
             self.footprint_layer.selectionChanged.connect(self.on_map_selection_changed)
 
+
     def get_info_from_zip(self, zip_filepath):
-        """
-        O nosso "Super-Extrator". Ele entra no ZIP, lê o XML 'SLC' e coleta
-        TUDO o que precisamos: coordenadas e todos os atributos.
-        """
         try:
             with zipfile.ZipFile(zip_filepath, 'r') as zf:
                 xml_filename = next((f for f in zf.namelist() if 'slc' in f.lower() and f.lower().endswith(self.metadata_file_extension)), None)
                 
                 if not xml_filename:
-                    return None # Se não achar o XML correto, desiste deste arquivo.
+                    QgsMessageLog.logMessage(f"Nenhum XML com 'slc' encontrado em {os.path.basename(zip_filepath)}", 'Sentinela', Qgis.Warning)
+                    return None
 
                 xml_content = zf.read(xml_filename)
                 root = ET.fromstring(xml_content)
                 
-                # 1. Extrai as Coordenadas
+                namespace = {}
+                if '}' in root.tag:
+                    namespace = {'ns': root.tag.split('}')[0][1:]}
+
+                def find_text_safely(path):
+                    if namespace: path = path.replace('.//', './/ns:')
+                    node = root.find(path, namespace)
+                    return node.text.strip() if node is not None and node.text else None
+
+                # Extrai as Coordenadas
                 def parse_coord(node_name):
-                    node = root.find(f'.//{node_name}')
-                    if node is not None and node.text:
-                        parts = node.text.strip().split()
+                    text_value = find_text_safely(f".//{node_name}")
+                    if text_value:
+                        parts = text_value.split()
                         return float(parts[-2]), float(parts[-1])
                     return None
                 
                 coords = {'first_near': parse_coord('coord_first_near'), 'first_far': parse_coord('coord_first_far'),
                         'last_near': parse_coord('coord_last_near'), 'last_far': parse_coord('coord_last_far')}
                 
-                # 2. Extrai TODOS os outros atributos
-                #    Lembre-se de ajustar os nomes das tags!
+                # Extrai os Atributos usando as tags corretas
                 attributes = {
-                    'product_type': root.findtext('.//productType', default='N/D'),
-                    'satellite_name': root.findtext('.//satellite', default='N/D'),
-                    'acquisition_mode': root.findtext('.//acquisitionMode', default='N/D'),
-                    'look_side': root.findtext('.//lookSide', default='N/D'),
-                    'orbit_direction': root.findtext('.//orbitDirection', default='N/D'),
-                    'polarization': root.findtext('.//polarization', default='N/D')
+                    'product_type': find_text_safely('.//product_type') or 'N/D',
+                    'satellite_name': find_text_safely('.//satellite_name') or 'N/D',
+                    'acquisition_mode': find_text_safely('.//acquisition_mode') or 'N/D',
+                    'look_side': find_text_safely('.//look_side') or 'N/D',
+                    'acquisition_start_utc': find_text_safely('.//acquisition_start_utc') or 'N/D', # Tratado como texto
+                    'orbit_direction': find_text_safely('.//orbit_direction') or 'N/D',
+                    'polarization': find_text_safely('.//polarization') or 'N/D',
+                    'product_file': find_text_safely('.//product_file') or 'N/D',
                 }
-                # Para campos numéricos, fazemos uma conversão segura
                 try:
-                    attributes['satellite_look_angle'] = float(root.findtext('.//satelliteLookAngle', default='0.0'))
-                    attributes['acquisition_start_utc'] = float(root.findtext('.//acquisitionStartTimeUTC', default='0.0'))
-                    attributes['incidence_center'] = float(root.findtext('.//incidenceAngleCenter', default='0.0'))
+                    attributes['satellite_look_angle'] = float(find_text_safely('.//satellite_look_angle') or 0.0)
+                    attributes['incidence_center'] = float(find_text_safely('.//incidence_center') or 0.0)
                 except (ValueError, TypeError):
                     attributes['satellite_look_angle'] = 0.0
-                    attributes['acquisition_start_utc'] = 0.0
                     attributes['incidence_center'] = 0.0
-
-                # 3. Retorna o pacote completo se as coordenadas essenciais existirem
+                
                 if all(coords.values()):
                     return {'coords': coords, 'attributes': attributes}
 
         except Exception as e:
-            QgsMessageLog.logMessage(f"Erro ao processar info de {zip_filepath}: {e}", 'Sentinela', Qgis.Warning)
+            QgsMessageLog.logMessage(f"ERRO CRÍTICO ao processar {os.path.basename(zip_filepath)}: {e}", 'Sentinela', Qgis.Critical)
+        
         return None
-
 
     def on_map_selection_changed(self):
         if not self.footprint_layer: return
@@ -353,10 +351,7 @@ from qgis.core import (QgsVectorLayer, QgsVectorDataProvider, QgsField,
                     self.image_list.addItem(file_name)
         except OSError as e:
             QMessageBox.critical(self, "Erro", f"Erro ao ler pasta: {e}")
-            
-# --- FIM DA DEFINIÇÃO DA CLASSE ---
 
-# --- LINHA DE IGNIÇÃO (para testar no console) ---
-# Esta linha cria uma instância do nosso "edifício" e o exibe.
+# Esta linha cria uma instância do nosso plicativo e o exibe.
 minha_ferramenta = SentinelaDeAcervo()
 minha_ferramenta.show()
